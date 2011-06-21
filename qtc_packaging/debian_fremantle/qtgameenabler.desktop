@@ -1,0 +1,12 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0
+Type=Application
+Name=Qt GameEnabler Test
+Exec=/opt/usr/bin/qtgameenablertest
+Icon=qtgameenabler
+StartupWMClass=
+X-Window-Icon=qtgameenabler
+X-HildonDesk-ShowInToolbar=true
+X-Osso-Type=application/x-executable
+Terminal=false
