@@ -4,14 +4,14 @@ QT += core gui
 
 TARGET = qtgameenablertest
 TEMPLATE = app
-VERSION = 1.1
+VERSION = 1.1.1
 
 # Comment the following line out for better performance. Using the definition
 # enables debug logging which is convenient for locating problems in the code
 # but is also very costly in terms of performance.
 DEFINES += GE_DEBUG
 
-INCLUDEPATH += src
+INCLUDEPATH += ./src ./test_src
 
 SOURCES += \
     src/GameWindow.cpp \
@@ -20,9 +20,9 @@ SOURCES += \
     src/GEAudioMixer.cpp \
     src/GEAudioOut.cpp \
     src/GEInterfaces.cpp \
-    main.cpp \
-    mygamewindow.cpp \
-    mygamewindoweventfilter.cpp
+    test_src/main.cpp \
+    test_src/mygamewindow.cpp \
+    test_src/mygamewindoweventfilter.cpp
 
 HEADERS  += \
     src/GameWindow.h \
@@ -32,8 +32,8 @@ HEADERS  += \
     src/GEAudioOut.h \
     src/GEInterfaces.h \
     src/trace.h \
-    mygamewindow.h \
-    mygamewindoweventfilter.h
+    test_src/mygamewindow.h \
+    test_src/mygamewindoweventfilter.h
 
 OTHER_FILES +=
     
