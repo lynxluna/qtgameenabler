@@ -26,7 +26,7 @@ SOURCES += \
     $${GE_PATH}/src/audiosourceif.cpp \
     $${GE_PATH}/src/gamewindow.cpp
 
- 
+
 symbian {
     message(Symbian build)
 
@@ -49,23 +49,23 @@ symbian {
     # implemented, be modified even a tiny bit, the application using this hack
     # might crash.
     #
-    #DEFINES += QTGAMEENABLER_USE_VOLUME_HACK    
-    
+    #DEFINES += QTGAMEENABLER_USE_VOLUME_HACK
+
     contains(DEFINES, QTGAMEENABLER_USE_VOLUME_HACK) {
         # Include paths and libraries required for the volume hack.
         message(Symbian volume hack enabled)
         INCLUDEPATH += /epoc32/include/mmf/common
         INCLUDEPATH += /epoc32/include/mmf/server
         LIBS += -lmmfdevsound
-    }   
+    }
 }
 
 
 # Unix based platforms
 unix:!symbian {
     # Common
-    LIBS += -lX11 -lEGL -lGLESv2      
-    
+    LIBS += -lX11 -lEGL -lGLESv2
+
     maemo5 {
         # Maemo 5 specific
         message(Maemo 5 build)
@@ -76,7 +76,7 @@ unix:!symbian {
             # Unix based desktop specific
             message(Unix based desktop build)
             QT += multimedia
-            
+
             INCLUDEPATH += ../SDKPackage_OGLES2/Builds/OGLES2/Include
             LIBS += -L../SDKPackage_OGLES2/Builds/OGLES2/LinuxPC/Lib
 
@@ -91,6 +91,7 @@ unix:!symbian {
 
             CONFIG += mobility
             MOBILITY += multimedia
+            QT += meegographicssystemhelper
         }
     }
 }

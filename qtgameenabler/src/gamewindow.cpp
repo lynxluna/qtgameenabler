@@ -12,6 +12,10 @@
 
 #include <GLES2/gl2.h>
 
+#ifdef Q_WS_MAEMO_6
+#include <qmeegographicssystemhelper.h>
+#endif
+
 #ifdef Q_OS_SYMBIAN
 #include <mw/coecntrl.h>
 #include <centralrepository.h>
@@ -62,6 +66,10 @@ GameWindow::GameWindow(QWidget *parent /* = 0 */)
     setAttribute(Qt::WA_PaintOnScreen, true);
     setAttribute(Qt::WA_StyledBackground, false);
     setAttribute(Qt::WA_PaintUnclipped);
+
+#ifdef Q_WS_MAEMO_6
+    QMeeGoGraphicsSystemHelper::setSwitchPolicy(QMeeGoGraphicsSystemHelper::NoSwitch);
+#endif
 
 #ifdef Q_OS_SYMBIAN
     TRAP_IGNORE(
