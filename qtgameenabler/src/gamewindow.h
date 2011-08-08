@@ -23,6 +23,16 @@
 #include "audiosourceif.h"
 
 #ifdef Q_OS_SYMBIAN
+// For volume keys
+#include <remconcoreapitargetobserver.h>
+#include <remconcoreapitarget.h>
+#include <remconinterfaceselector.h>
+
+#include <AccMonitor.h>
+#include <w32std.h>
+#include <mw/coemain.h>
+#include <mw/coedef.h>
+
 class CRepository;
 #endif
 
@@ -30,6 +40,10 @@ class CRepository;
 namespace GE {
 
 class GameWindow : public QWidget
+#ifdef Q_OS_SYMBIAN
+                  ,public MRemConCoreApiTargetObserver
+                  ,public MAccMonitorObserver
+#endif
 {
     Q_OBJECT
 
@@ -43,11 +57,16 @@ public:
     bool isProfileSilent() const;
     inline bool audioEnabled() { return m_audioEnabled; }
     AudioMixer &getMixer() { return m_audioMixer; }
+    void setHdOutput(bool onOff);
+    inline bool hdEnabled() const { return m_hdEnabled; }
+    inline bool hdConnected() const { return m_hdConnected; }
 
 public: // Helpers/getters
     unsigned int getTickCount() const;
     float getFrameTime() const { return m_frameTime; }
     float getFPS() const { return m_fps; }
+    int width();
+    int height();
 
 public slots:
     void pause();
@@ -63,18 +82,42 @@ protected: // From QWidget (and other base classes)
 
 protected: // Application callbacks, override these in your own derived class
     virtual int onCreate();
+    virtual void onInitEGL();
+    virtual void onFreeEGL();
     virtual void onDestroy();
     virtual void onRender();
     virtual void onPause();
     virtual void onResume();
+    virtual void onVolumeUp();
+    virtual void onVolumeDown();
+
     virtual void update(const float frameDelta);
     virtual void setSize(int width, int height);
 
 protected: // For internal functionality
     virtual void createEGL();
+    void reinitEGL();
     void render();
     bool testEGLError(const char* pszLocation);
     void cleanupAndExit(EGLDisplay eglDisplay);
+    virtual EGLNativeWindowType getWindow();
+
+#ifdef Q_OS_SYMBIAN
+protected:
+    void DestroyWindow();
+    void CreateWindowL();
+
+protected:
+    // For volume keys
+    void MrccatoCommand(TRemConCoreApiOperationId aOperationId,
+        TRemConCoreApiButtonAction aButtonAct);
+
+    // MAccMonitorObserver
+    virtual void ConnectedL(CAccMonitorInfo *aAccessoryInfo);
+    virtual void DisconnectedL(CAccMonitorInfo *aAccessoryInfo);
+    virtual void AccMonitorObserverError(TInt aError) { }
+
+#endif
 
 protected: // Data
     // EGL variables
@@ -96,8 +139,26 @@ protected: // Data
     AudioMixer m_audioMixer;
     bool m_audioEnabled;
 
+    // HD output
+    bool m_hdEnabled;
+    bool m_hdConnected;
+
 #ifdef Q_OS_SYMBIAN
-    CRepository *iProfileRepository; // Owned
+
+    // TODO: Move HD and volume control into separate classes
+
+    // For HD output
+    RWsSession iWsSession;
+    CWsScreenDevice *iScreenDevice;
+    RWindowGroup *iWindowGroup;
+    RWindow *iWindow;
+    CAccMonitor *iAccMonitor;
+
+    // For volume keys and active profile
+    CRemConInterfaceSelector *iInterfaceSelector;
+    CRemConCoreApiTarget *iCoreTarget;
+    CRepository *iProfileRepository;
+
 #endif
 };
 

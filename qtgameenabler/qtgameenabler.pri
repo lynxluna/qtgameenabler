@@ -38,6 +38,12 @@ symbian {
 
     LIBS += -llibEGL -llibGLESv2 -lcone -leikcore -lavkon
 
+    # For HD output
+    LIBS += -lws32 -laccmonitor
+
+    # For volume keys
+    LIBS += -lremconcoreapi -lremconinterfacebase
+
     # Uncomment the following define to enable a very ugly hack to set the
     # volume level on Symbian devices higher. By default, on Symbian, the volume
     # level is very low when audio is played using QAudioOutput class. For now,

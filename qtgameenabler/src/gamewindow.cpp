@@ -28,6 +28,11 @@ const TUid KCRUidProfileEngine =
 
 // Key for warning and game tones enabled in active profile
 const TUint32 KProEngActiveWarningTones = 0x7E000020;
+
+_LIT(KWgName, "HdmiOutput");
+const TUint32 KWgId = 0xeeeeeeee; // TODO: define unique id
+const TUint32 KHdScreen = 1;
+
 #endif
 
 #include "trace.h" // For debug macros
@@ -54,9 +59,16 @@ GameWindow::GameWindow(QWidget *parent /* = 0 */)
       m_paused(true),
       m_timerId(0),
       m_audioOutput(0),
-      m_audioEnabled(false)
+      m_audioEnabled(false),
+      m_hdEnabled(false),
+      m_hdConnected(false)
 #ifdef Q_OS_SYMBIAN
-      , iProfileRepository( 0 )
+    , iScreenDevice(NULL),
+      iWindowGroup(NULL),
+      iWindow(NULL),
+      iAccMonitor(NULL),
+      iInterfaceSelector(NULL),
+      iProfileRepository(NULL)
 #endif
 {
     setAutoFillBackground(false);
@@ -67,11 +79,22 @@ GameWindow::GameWindow(QWidget *parent /* = 0 */)
     setAttribute(Qt::WA_StyledBackground, false);
     setAttribute(Qt::WA_PaintUnclipped);
 
+#ifdef GE_USE_MM_KEYS
+    QApplication::setAttribute(Qt::AA_CaptureMultimediaKeys);
+#endif
+
 #ifdef Q_WS_MAEMO_6
     QMeeGoGraphicsSystemHelper::setSwitchPolicy(QMeeGoGraphicsSystemHelper::NoSwitch);
 #endif
 
 #ifdef Q_OS_SYMBIAN
+    // For volume keys
+    TRAP_IGNORE(
+        iInterfaceSelector = CRemConInterfaceSelector::NewL();
+        iCoreTarget = CRemConCoreApiTarget::NewL(*iInterfaceSelector, *this);
+        iInterfaceSelector->OpenTargetL();
+    );
+
     TRAP_IGNORE(
         iProfileRepository = CRepository::NewL( KCRUidProfileEngine );
     );
@@ -86,6 +109,21 @@ GameWindow::~GameWindow()
 {
 #ifdef Q_OS_SYMBIAN
     delete iProfileRepository;
+    iProfileRepository = NULL;
+
+    // For volume keys
+    delete iInterfaceSelector;
+    iInterfaceSelector = NULL;
+    iCoreTarget = NULL; // owned by interfaceselector
+
+    DestroyWindow();
+
+    if (iAccMonitor) {
+        delete iAccMonitor;
+        iAccMonitor = NULL;
+
+        iWsSession.Close();
+    }
 #endif
 
     stopAudio();
@@ -103,6 +141,7 @@ void GameWindow::create()
     createEGL();
 
     onCreate();
+    onInitEGL();
 
     m_currentTime = getTickCount();
     m_prevTime = m_currentTime;
@@ -121,6 +160,7 @@ void GameWindow::create()
 void GameWindow::destroy()
 {
     DEBUG_POINT;
+    onFreeEGL();
     onDestroy();
 }
 
@@ -162,6 +202,7 @@ unsigned int GameWindow::getTickCount() const
 void GameWindow::pause()
 {
     DEBUG_POINT;
+    m_paused = true;
     stopAudio();
     killTimer(m_timerId);
     m_timerId = 0;
@@ -183,6 +224,8 @@ void GameWindow::resume()
     // Wait a little while to be able to see the new profile correctly.
     User::After( 500000 );
 #endif
+
+    m_paused = false;
 
     if (!isProfileSilent())
         startAudio();
@@ -224,6 +267,71 @@ void GameWindow::stopAudio()
     m_audioOutput = 0;
 }
 
+/**
+  Return native window handle
+*/
+EGLNativeWindowType GameWindow::getWindow()
+{
+    EGLNativeWindowType pwd;
+
+#ifdef Q_OS_SYMBIAN
+    if (iWindow)
+        pwd = (EGLNativeWindowType)iWindow;
+    else
+        pwd = (EGLNativeWindowType)(this->winId()->DrawableWindow());
+#else
+    pwd = (EGLNativeWindowType)this->winId();
+#endif
+
+    return pwd;
+}
+
+void GameWindow::setHdOutput(bool onOff)
+{
+#ifdef Q_OS_SYMBIAN
+    if (onOff) {
+        if (!iAccMonitor) {
+            QT_TRAP_THROWING(
+                User::LeaveIfError(iWsSession.Connect());
+
+                iAccMonitor = CAccMonitor::NewL();
+
+                // invoke callback for all currently connected accessories
+                RConnectedAccessories array;
+                CleanupClosePushL(array);
+                iAccMonitor->GetConnectedAccessoriesL(array);
+
+                for (int i = 0; i < array.Count(); i++)
+                    ConnectedL(array[i]);
+
+                CleanupStack::PopAndDestroy(&array);
+
+                // register to listen for changes
+                RAccMonCapabilityArray capabilityArray;
+                CleanupClosePushL(capabilityArray);
+                capabilityArray.Append(KAccMonHDMI);
+                iAccMonitor->StartObservingL(this, capabilityArray);
+                CleanupStack::PopAndDestroy(&capabilityArray);
+            );
+        }
+    }
+    else {
+        if (m_hdConnected) {
+            m_hdConnected = false;
+            reinitEGL();
+        }
+        if (iAccMonitor) {
+            iAccMonitor->StopObserving();
+            delete iAccMonitor;
+            iAccMonitor = NULL;
+
+            iWsSession.Close();
+        }
+    }
+#endif
+    m_hdEnabled = onOff;
+}
+
 
 /*!
   From QObject.
@@ -237,23 +345,52 @@ bool GameWindow::eventFilter(QObject *object, QEvent *event)
     // http://doc.trolltech.com/4.7/qevent.html#QEvent
     if (event->type() == QEvent::ActivationChange) {
         if (m_paused)
-            m_paused = false;
-        else
-            m_paused = true;
-
-        if (m_paused)
-            pause();
-        else
             resume();
+        else
+            pause();
 
         DEBUG_INFO("ActivationChange event filtered -> toggle pause");
         return false;
     }
+#ifdef GE_USE_MM_KEYS
+    else if (event->type () == QEvent::KeyPress) {
+        QKeyEvent* k = (QKeyEvent*)event;
+        switch (k->key()) {
+            case Qt::Key_VolumeDown:
+                onVolumeDown();
+                return true;
+            case Qt::Key_VolumeUp:
+                onVolumeUp();
+                return true;
+            default:
+                break;
+        }
+    }
+#endif
 
     // Let the event propagate for standard event processing.
     return QObject::eventFilter(object, event);
 }
 
+int GameWindow::width()
+{
+#ifdef Q_OS_SYMBIAN
+    if (iWindow)
+        return iScreenDevice->SizeInPixels().iWidth;
+#endif
+
+    return QWidget::width();
+}
+
+int GameWindow::height()
+{
+#ifdef Q_OS_SYMBIAN
+    if (iWindow)
+        return iScreenDevice->SizeInPixels().iHeight;
+#endif
+
+    return QWidget::height();
+}
 
 /*!
   From QWidget.
@@ -262,14 +399,22 @@ bool GameWindow::eventFilter(QObject *object, QEvent *event)
 */
 void GameWindow::resizeEvent(QResizeEvent *event)
 {
-    if (event->size().width() == event->oldSize().width()
-            && event->size().height() == event->oldSize().height()) {
-        // The size has not changed.
-        return;
+    int w, h;
+    if (m_hdConnected) {
+        // always fake hdmi output resolution
+        w = width();
+        h = height();
     }
+    else {
+        if (event->size().width() == event->oldSize().width()
+                && event->size().height() == event->oldSize().height()) {
+            // The size has not changed.
+            return;
+        }
 
-    int w = event->size().width();
-    int h = event->size().height();
+        w = event->size().width();
+        h = event->size().height();
+    }
 
     DEBUG_INFO("Setting the viewport.");
     glViewport(0,0, w, h);
@@ -293,7 +438,6 @@ void GameWindow::timerEvent(QTimerEvent *event)
     render();
 }
 
-
 /*!
   Called after OpenGL ES 2.0 is created to let the application to allocate
   its resources.
@@ -304,6 +448,16 @@ int GameWindow::onCreate()
 {
     DEBUG_POINT;
     return 1;
+}
+
+void GameWindow::onInitEGL()
+{
+    DEBUG_POINT;
+}
+
+void GameWindow::onFreeEGL()
+{
+    DEBUG_POINT;
 }
 
 
@@ -337,6 +491,7 @@ void GameWindow::onRender()
 */
 void GameWindow::onPause()
 {
+    DEBUG_POINT;
 }
 
 
@@ -347,8 +502,34 @@ void GameWindow::onPause()
 */
 void GameWindow::onResume()
 {
+    DEBUG_POINT;
 }
 
+
+/*!
+  Called when volume up -key is pressed.
+
+  Default implementation increases absolute volume by 1/20.
+*/
+void GameWindow::onVolumeUp()
+{
+    DEBUG_POINT;
+    m_audioMixer.setAbsoluteVolume(
+        qMin(1.0f, m_audioMixer.absoluteVolume() + 1.0f / 20.0f));
+}
+
+
+/*!
+  Called when volume down -key is pressed.
+
+  Default implementation decreases absolute volume by 1/20.
+*/
+void GameWindow::onVolumeDown()
+{
+    DEBUG_POINT;
+    m_audioMixer.setAbsoluteVolume(
+        qMax(0.0f, m_audioMixer.absoluteVolume() - 1.0f / 20.0f));
+}
 
 /*!
   Called once before each frame, \a frameDelta attribute is set as the time
@@ -438,13 +619,7 @@ void GameWindow::createEGL()
 
     DEBUG_INFO("eglChooseConfig() finished");
 
-#ifdef Q_OS_SYMBIAN
-    EGLNativeWindowType pwd = (void*)(this->winId()->DrawableWindow());
-#else
-    EGLNativeWindowType pwd = (EGLNativeWindowType)this->winId();
-#endif
-
-    eglSurface = eglCreateWindowSurface(eglDisplay, eglConfig, pwd, NULL);
+    eglSurface = eglCreateWindowSurface(eglDisplay, eglConfig, getWindow(), NULL);
     DEBUG_INFO("englCreateWindowSurface() finished");
 
     if (!testEGLError("eglCreateWindowSurface")) {
@@ -534,15 +709,11 @@ void GameWindow::render()
 
             eglDestroySurface(eglDisplay, eglSurface);
 
-#ifdef Q_OS_SYMBIAN
-            EGLNativeWindowType pwd = (void*)(this->winId()->DrawableWindow());
-#else
-            EGLNativeWindowType pwd = (EGLNativeWindowType)this->winId();
-#endif
             eglSurface = eglCreateWindowSurface(eglDisplay,
                                                 eglConfig,
-                                                pwd,
+                                                getWindow(),
                                                 NULL);
+            eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext);
         }
         else {
             cleanupAndExit(eglDisplay);
@@ -561,7 +732,7 @@ bool GameWindow::testEGLError(const char *pszLocation)
     EGLint err = eglGetError();
 
     if (err != EGL_SUCCESS) {
-        DEBUG_INFO("%s failed (%d)" <<  pszLocation << err);
+        DEBUG_INFO(pszLocation << "failed" << err);
         return false;
     }
 
@@ -575,6 +746,110 @@ bool GameWindow::testEGLError(const char *pszLocation)
 void GameWindow::cleanupAndExit(EGLDisplay eglDisplay)
 {
     eglMakeCurrent(eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    eglDestroySurface(eglDisplay, eglSurface);
+#ifdef Q_OS_SYMBIAN
+    DestroyWindow();
+#endif
     eglTerminate(eglDisplay);
     exit(0);
 }
+
+void GameWindow::reinitEGL()
+{
+    onFreeEGL();
+
+    eglMakeCurrent(eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    eglDestroySurface(eglDisplay, eglSurface);
+
+#ifdef Q_OS_SYMBIAN
+    DestroyWindow();
+
+    if (m_hdConnected)
+        QT_TRAP_THROWING(CreateWindowL());
+#endif
+
+    createEGL();
+    onInitEGL();
+}
+
+#ifdef Q_OS_SYMBIAN
+void GameWindow::ConnectedL(CAccMonitorInfo *aAccessoryInfo)
+{
+    if (aAccessoryInfo->Exists(KAccMonHDMI)) {
+        m_hdConnected = true;
+        reinitEGL();
+    }
+}
+
+void GameWindow::DisconnectedL(CAccMonitorInfo *aAccessoryInfo)
+{
+    if (aAccessoryInfo->Exists(KAccMonHDMI)) {
+        m_hdConnected = false;
+        reinitEGL();
+    }
+}
+
+void GameWindow::CreateWindowL()
+{
+    if (iWindow)
+        return;
+
+    iScreenDevice = new (ELeave) CWsScreenDevice(iWsSession);
+    TInt err = iScreenDevice->Construct(KHdScreen);
+    User::LeaveIfError(err);
+
+    iWsSession.ComputeMode(RWsSession::EPriorityControlDisabled);
+
+    iWindowGroup = new (ELeave) RWindowGroup(iWsSession);
+    err = iWindowGroup->Construct(KWgId, iScreenDevice);
+    User::LeaveIfError(err);
+    err = iWindowGroup->SetName(KWgName);
+    User::LeaveIfError(err);
+
+    iWindowGroup->EnableReceiptOfFocus(EFalse);
+
+    TSize size = iScreenDevice->SizeInPixels();
+
+    iWindow = new (ELeave) RWindow(iWsSession);
+    User::LeaveIfError(iWindow->Construct(*iWindowGroup, (TUint32) iWindow));
+
+    iWindow->SetExtent(TPoint(0, 0), size);
+    iWindow->SetOrdinalPosition(0, ECoeWinPriorityAlwaysAtFront + 1);
+    iWindow->SetNonFading(ETrue);
+    iWindow->SetVisible(ETrue);
+    iWindow->Activate();
+}
+
+void GameWindow::DestroyWindow()
+{
+    if (iWindow) {
+        iWindow->Close();
+        delete iWindow;
+        iWindow = NULL;
+    }
+
+    if (iWindowGroup) {
+        iWindowGroup->Close();
+        delete iWindowGroup;
+        iWindowGroup = NULL;
+    }
+
+    delete iScreenDevice;
+    iScreenDevice = NULL;
+}
+
+// For volume keys
+void GameWindow::MrccatoCommand(TRemConCoreApiOperationId aOperationId,
+                                TRemConCoreApiButtonAction aButtonAct)
+{
+    //if (aButtonAct == ERemConCoreApiButtonClick) {
+    if (aButtonAct == ERemConCoreApiButtonPress) {
+        if (aOperationId == ERemConCoreApiVolumeUp)
+            onVolumeUp();
+        else if (aOperationId == ERemConCoreApiVolumeDown)
+            onVolumeDown();
+    }
+}
+
+#endif
+
